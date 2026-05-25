@@ -1,0 +1,22 @@
+{
+  "name": "rayanxweb-gateway",
+  "version": "2.0.0",
+  "description": "Production High-Performance WebSocket Gateway for RAYANXWEB",
+  "main": "dist/server.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "dev": "ts-node src/server.ts"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "socket.io": "^4.7.5"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.4.5"
+  }
+}
