@@ -1,18 +1,29 @@
 import { initializeApp, cert } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
+import * as dotenv from 'dotenv';
 
-// Pastikan Anda sudah menyimpan file serviceAccountKey.json di root
-const serviceAccount = require('../../serviceAccountKey.json');
+dotenv.config();
 
-initializeApp({ credential: cert(serviceAccount) });
+// Mengambil dan mem-parsing string JSON dari .env
+const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT || '{}');
+
+initializeApp({
+  credential: cert(serviceAccount)
+});
+
 const db = getFirestore();
 
 export const validatePin = async (email: string, pin: string): Promise<boolean> => {
-  const userRef = db.collection('users').doc(email.toLowerCase());
-  const doc = await userRef.get();
-  
-  if (doc.exists && doc.data()?.pin === pin) {
-    return true;
+  try {
+    const userRef = db.collection('users').doc(email.toLowerCase());
+    const doc = await userRef.get();
+    
+    if (doc.exists && doc.data()?.pin === pin) {
+      return true;
+    }
+    return false;
+  } catch (error) {
+    console.error("Error validating PIN:", error);
+    return false;
   }
-  return false;
 };
