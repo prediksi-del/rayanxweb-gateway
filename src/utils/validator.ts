@@ -1,17 +1,19 @@
-import { initializeApp, cert } from 'firebase-admin/app';
-import { getFirestore } from 'firebase-admin/firestore';
+import * as admin from 'firebase-admin';
 import * as dotenv from 'dotenv';
 
 dotenv.config();
 
-// Mengambil dan mem-parsing string JSON dari .env
+// Pastikan proses JSON.parse aman
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT || '{}');
 
-initializeApp({
-  credential: cert(serviceAccount)
-});
+// Inisialisasi Firebase Admin
+if (!admin.apps.length) {
+  admin.initializeApp({
+    credential: admin.credential.cert(serviceAccount)
+  });
+}
 
-const db = getFirestore();
+const db = admin.firestore();
 
 export const validatePin = async (email: string, pin: string): Promise<boolean> => {
   try {
