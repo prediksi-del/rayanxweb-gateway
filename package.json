@@ -1,18 +1,19 @@
 {
   "name": "rayanxweb-gateway",
   "version": "1.0.0",
-  "description": "Enterprise Realtime WebSocket Gateway Server",
+  "description": "Enterprise Realtime WebSocket Gateway Component",
   "main": "dist/server/index.js",
   "scripts": {
-    "dev": "ts-node-dev --respawn --transpile-only src/server/index.ts",
-    "clean": "rimraf dist",
+    "clean": "rm -rf dist",
     "build": "npm run clean && tsc",
     "start": "node dist/server/index.js",
-    "lint": "eslint 'src/**/*.{ts,tsx}'",
-    "format": "prettier --write 'src/**/*.{ts,tsx}'"
+    "dev": "ts-node-dev --respawn --transpile-only src/server/index.ts",
+    "lint": "eslint 'src/**/*.ts'",
+    "test": "jest"
   },
   "dependencies": {
     "@socket.io/redis-adapter": "^8.3.0",
+    "compression": "^1.7.5",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
@@ -24,12 +25,11 @@
     "winston": "^3.17.0"
   },
   "devDependencies": {
+    "@types/compression": "^1.7.5",
     "@types/cors": "^2.8.17",
     "@types/express": "^4.17.21",
     "@types/jsonwebtoken": "^9.0.8",
     "@types/node": "^22.13.4",
-    "prettier": "^3.5.1",
-    "rimraf": "^6.0.1",
     "ts-node-dev": "^2.0.0",
     "typescript": "^5.7.3"
   }
