@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  gateway:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - NODE_ENV=development
+      - REDIS_URL=redis://redis_backend:6379
+      - JWT_SECRET=local-development-only-secret-string-32-chars
+    depends_on:
+      - redis_backend
+
+  redis_backend:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
